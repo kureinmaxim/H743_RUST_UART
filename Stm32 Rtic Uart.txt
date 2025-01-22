@@ -1,0 +1,120 @@
+Для организации обмена данными через UART между STM32H743ZI2 и ПК под управлением Windows можно использовать библиотеку `stm32h7xx-hal` для настройки UART. На стороне Windows можно использовать терминальную программу, такую как **PuTTY**, **Tera Term**, или любой другой инструмент для работы с COM-портами.
+
+### Пример кода для STM32H743ZI2 (с использованием RTIC)
+
+1. **Обновите `Cargo.toml`:**
+Добавьте зависимости для работы с UART:
+```toml
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+cortex-m-rtic = "0.6"
+stm32h7xx-hal = "0.14"
+nb = "1.0"
+panic-halt = "0.2"
+
+[dependencies.embedded-hal]
+version = "0.2"
+features = ["unproven"]
+```
+
+2. **Код для обмена через UART:**
+
+```rust
+#![no_main]
+#![no_std]
+
+use panic_halt as _; // Паника завершает выполнение
+use rtic::app;
+use stm32h7xx_hal::{pac, prelude::*, serial::{Serial, Config}};
+use core::fmt::Write; // Для write! макроса
+
+#[app(device = stm32h7xx_hal::pac, peripherals = true)]
+mod app {
+    use super::*;
+
+    #[shared]
+    struct Shared {}
+
+    #[local]
+    struct Local {
+        tx: stm32h7xx_hal::serial::Tx<pac::USART3>,
+        rx: stm32h7xx_hal::serial::Rx<pac::USART3>,
+    }
+
+    #[init]
+    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+        let mut dp = ctx.device;
+
+        // Настройка тактирования
+        let ccdr = dp.RCC.constrain().sys_ck(100.mhz()).freeze();
+
+        // Настройка GPIO для UART
+        let gpiob = dp.GPIOB.split(ccdr.peripheral.GPIOB);
+        let tx_pin = gpiob.pb10.into_alternate();
+        let rx_pin = gpiob.pb11.into_alternate();
+
+        // Настройка UART
+        let serial = Serial::new(
+            dp.USART3,
+            (tx_pin, rx_pin),
+            Config::default().baudrate(115200.bps()),
+            ccdr.peripheral.USART3,
+            &ccdr.clocks,
+        );
+
+        let (tx, rx) = serial.split();
+
+        // Отправляем приветственное сообщение
+        let mut tx_clone = tx.clone();
+        write!(tx_clone, "UART Initialized\r\n").unwrap();
+
+        (Shared {}, Local { tx, rx }, init::Monotonics())
+    }
+
+    #[idle(local = [rx, tx])]
+    fn idle(ctx: idle::Context) -> ! {
+        let rx = ctx.local.rx;
+        let tx = ctx.local.tx;
+
+        let mut buffer = [0; 1]; // Буфер для одного символа
+
+        loop {
+            // Чтение байта из UART
+            if let Ok(_) = rx.read_exact(&mut buffer) {
+                // Отправка полученного байта обратно
+                tx.write(buffer[0]).unwrap();
+            }
+        }
+    }
+}
+```
+
+3. **Компиляция и прошивка:**
+
+- Компилируйте проект:
+  ```bash
+  cargo build --release
+  ```
+- Загрузите прошивку на плату, используя `openocd` или другой загрузчик.
+
+4. **Настройка Windows для работы с UART:**
+
+   - Подключите плату через USB, используя USB-UART преобразователь или ST-Link с виртуальным COM-портом.
+   - Откройте диспетчер устройств и определите номер COM-порта.
+   - Запустите терминальную программу (например, PuTTY):
+     - Укажите номер COM-порта.
+     - Установите скорость 115200 бод.
+     - Настройки: 8N1 (8 бит данных, без четности, 1 стоп-бит).
+
+5. **Работа программы:**
+
+   - Плата отправит сообщение "UART Initialized" при запуске.
+   - Любые данные, отправленные с ПК, будут возвращаться обратно платой (эхо).
+
+### Рекомендации:
+- Если требуется обмен длинными строками, увеличьте размер буфера в коде.
+- Для отладки можно добавить LED-индикацию или логирование через UART.
+- Убедитесь, что правильно подключены TX и RX между STM32 и USB-UART преобразователем.
+
+Дайте знать, если потребуется помощь с отладкой!
